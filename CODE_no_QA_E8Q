@@ -1,0 +1,935 @@
+*&---------------------------------------------------------------------*
+*& Report  ZRMM0026
+*----------------------------------------------------------------------*
+*                              Claro/SA                                *
+*----------------------------------------------------------------------*
+* Autor....: Aliane M. Ladeira/LMoreira                                *
+* Empresa..: Hitss do Brasil                                           *
+* Data.....: 02/07/2024                                                *
+* Módulo...: MM                                                        *
+* Request incial:  ECDK9A1JSJ                                          *
+*  SD 7000006114/142074 Extrator da Transação MB51_ZT438               *
+* Descrição: Relatório/Extrator da Transação MB51_ZT438                *
+*----------------------------------------------------------------------*
+*                   Histórico das Alterações                           *
+*----------------------------------------------------------------------*
+* DATA        DESCRIÇÃO                               AUTOR            *
+*----------------------------------------------------------------------*
+
+REPORT zrmm0026 MESSAGE-ID z_tms.
+
+TABLES: mkpf, mseg, equi, eqbs, ser03, objk, equz, likp, j_1bnfdoc, vbrp, vbrk, j_1bnflin.
+
+*---------------------------------------------------------------------*
+* Types
+*---------------------------------------------------------------------*
+TYPES: BEGIN OF ty_saida,
+         budat           TYPE mkpf-budat, " Data lançamento
+         bwart           TYPE mseg-bwart, " TpMov
+         mtart           TYPE mara-mtart, " Tipo Material
+         lifnr           TYPE mseg-lifnr. " Fornecedor
+        INCLUDE STRUCTURE zssd167b.       " ZT438
+TYPES: datum           TYPE sy-datum,     " data_arquivo
+       uzeit           TYPE sy-uzeit,     " hora_arquivo
+* INI - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+      zeile            TYPE mseg-zeile,   " item
+      xblnr            TYPE mkpf-xblnr,   " nota_fiscal
+      xblnr1           TYPE mkpf-xblnr,   " serie_nf
+      bldat            TYPE mkpf-bldat,   " data_nf
+      rsnum            TYPE mseg-rsnum,   " reserva
+      rsdat            TYPE rkpf-rsdat,   " data_reserva
+* FIM - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+
+END OF ty_saida.
+
+*---------------------------------------------------------------------*
+* Tabelas/Estruturas Globais
+*---------------------------------------------------------------------*s
+DATA: gt_saida TYPE TABLE OF ty_saida,
+      gs_saida TYPE ty_saida,
+      gv_gernr TYPE zgernr.
+
+*---------------------------------------------------------------------*
+* Constantes
+*---------------------------------------------------------------------*
+CONSTANTS: lc_path_server TYPE epsf-epsdirnam VALUE '/producao/interface/mmbi/zt0378',
+           lc_path_local  TYPE epsf-epsdirnam VALUE 'C:\TEMP\'.
+
+*------------------------------------------------------------------------------*
+* Tela de seleção
+*------------------------------------------------------------------------------*
+* Parâmetros de entrada
+SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE text-b01.
+SELECT-OPTIONS: s_bwart FOR mseg-bwart,
+                s_budat FOR mkpf-budat OBLIGATORY,
+                s_vgart FOR mkpf-vgart,
+                s_mblnr FOR mkpf-mblnr,
+                s_mjahr FOR mkpf-mjahr.
+SELECTION-SCREEN: END OF BLOCK b01.
+
+SELECTION-SCREEN BEGIN OF BLOCK bl1 WITH FRAME TITLE text-b03.
+SELECT-OPTIONS: s_matnr FOR equi-matnr,
+                s_serge FOR gv_gernr,
+                s_invnr FOR equi-invnr,
+                s_equnr FOR equi-equnr,
+                s_werks FOR eqbs-b_werk,
+                s_lgort FOR eqbs-b_lager,
+                s_lbbsa FOR eqbs-lbbsa.
+SELECTION-SCREEN SKIP 1.
+SELECT-OPTIONS: s_esn18  FOR equi-serge,
+                s_matnr2 FOR vbrp-matnr,
+                s_kunnr  FOR likp-kunnr,
+                s_nfnum  FOR j_1bnfdoc-nfnum,
+                s_docdat FOR j_1bnfdoc-docdat,
+                s_vkorg  FOR vbrk-vkorg,
+                s_vtweg  FOR vbrk-vtweg,
+                s_vbeln  FOR likp-vbeln.
+SELECTION-SCREEN END OF BLOCK bl1.
+
+* Modo de execução
+SELECTION-SCREEN  BEGIN OF BLOCK b02 WITH FRAME TITLE text-b02.
+PARAMETERS: p_alv RADIOBUTTON GROUP a1, " Modo ALV
+            p_ext RADIOBUTTON GROUP a1. " Modo Extrator
+
+SELECTION-SCREEN  BEGIN OF BLOCK b03 WITH FRAME TITLE text-b03.
+PARAMETER: p_serv RADIOBUTTON GROUP rad1 USER-COMMAND file DEFAULT 'X',
+           p_dir_s LIKE epsf-epsdirnam DEFAULT lc_path_server,
+           p_loc  RADIOBUTTON GROUP rad1,
+           p_dir_l LIKE rlgrap-filename DEFAULT lc_path_local.
+SELECTION-SCREEN: END OF BLOCK b03.
+
+SELECTION-SCREEN: END OF BLOCK b02.
+
+*------------------------------------------------------------------------------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_dir_s.
+*------------------------------------------------------------------------------*
+  PERFORM f_get_diretorio_file CHANGING p_dir_s.
+
+*------------------------------------------------------------------------------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_dir_l.
+*------------------------------------------------------------------------------*
+  PERFORM f_get_diretorio_file CHANGING p_dir_l.
+
+*------------------------------------------------------------------------------*
+START-OF-SELECTION.
+*------------------------------------------------------------------------------*
+  PERFORM: f_get_and_fill_data,
+           f_generate_file,
+           f_display_alv.
+
+*&---------------------------------------------------------------------*
+*&      Form  F_GET_DIRETORIO_FILE
+*&---------------------------------------------------------------------*
+FORM f_get_diretorio_file CHANGING cv_filename TYPE any.
+
+  DATA: lv_file TYPE string.
+
+  CASE abap_true.
+    WHEN p_loc.
+      lv_file = cv_filename.
+
+      CALL METHOD cl_gui_frontend_services=>directory_browse
+        CHANGING
+          selected_folder      = lv_file
+        EXCEPTIONS
+          cntl_error           = 1
+          error_no_gui         = 2
+          not_supported_by_gui = 3
+          OTHERS               = 4.
+      IF sy-subrc IS INITIAL.
+        cv_filename = lv_file && '\'.
+      ELSE.
+        FREE: cv_filename.
+      ENDIF.
+    WHEN p_serv.
+      CALL FUNCTION '/SAPDMC/LSM_F4_SERVER_FILE'
+        IMPORTING
+          serverfile       = cv_filename
+        EXCEPTIONS
+          canceled_by_user = 1
+          OTHERS           = 2.
+      IF NOT sy-subrc IS INITIAL.
+        FREE: cv_filename.
+      ENDIF.
+  ENDCASE.
+
+ENDFORM.                    " F_GET_DIRETORIO_FILE
+*&---------------------------------------------------------------------*
+*&      Form  F_GET_AND_FILL_DATA
+*&---------------------------------------------------------------------*
+FORM f_get_and_fill_data .
+
+  CONSTANTS lc_ieq TYPE char03 VALUE 'IEQ'.
+
+  FIELD-SYMBOLS: <fs_t_data> TYPE ANY TABLE,
+                 <fs_s_data> TYPE any,
+                 <fs_x_whs>  TYPE any.
+
+  TYPES: BEGIN OF ty_doc_mat,
+           mblnr TYPE mkpf-mblnr,
+           mjahr TYPE mkpf-mjahr,
+           zeile TYPE mseg-zeile,
+           matnr TYPE mseg-matnr,
+           budat TYPE mkpf-budat,
+           bwart TYPE mseg-bwart,
+           lifnr TYPE mseg-lifnr,
+* INI - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+           lgort  TYPE mseg-lgort,   " depósito
+           xblnr  TYPE mkpf-xblnr,   " nota_fiscal/Serie
+           bldat  TYPE mkpf-bldat,   " data_nf
+           rsnum  TYPE mseg-rsnum,   " reserva
+           rsdat  TYPE rkpf-rsdat,   " data_reserva
+* FIM - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+           mtart TYPE mara-mtart,
+         END OF ty_doc_mat,
+
+         BEGIN OF ty_doc_mat_sel,
+           mblnr TYPE mkpf-mblnr,
+           mjahr TYPE mkpf-mjahr,
+         END OF ty_doc_mat_sel,
+
+         BEGIN OF ty_objk_ser03,
+           equnr TYPE objk-equnr,
+           sernr TYPE objk-sernr,
+           matnr TYPE objk-matnr,
+           mblnr TYPE ser03-mblnr,
+           mjahr TYPE ser03-mjahr,
+           zeile TYPE ser03-zeile,
+         END OF ty_objk_ser03.
+
+  FIELD-SYMBOLS: <fs_s_saida> TYPE ty_saida.
+
+  DATA: lt_doc_mat    TYPE TABLE OF ty_doc_mat,
+        ls_doc_mat    TYPE ty_doc_mat,
+        lt_doc_mat_s  TYPE TABLE OF ty_doc_mat_sel,
+        ls_doc_mat_s  TYPE ty_doc_mat_sel,
+        lf_ref        TYPE REF TO data,
+        lt_texpr      TYPE rsds_texpr,
+        lt_x_ssd167b  TYPE TABLE OF zssd167b,
+        ls_x_ssd167b  TYPE zssd167b,
+        lt_x_ssd180b  TYPE TABLE OF zssd180b,
+        ls_x_ssd180b  TYPE zssd180b,
+        lt_objk_ser03 TYPE TABLE OF ty_objk_ser03,
+        ls_objk_ser03 TYPE ty_objk_ser03,
+        lv_x_whs      TYPE char01,
+        lv_cont       TYPE i,
+        lv_zrmm0026   TYPE char01.
+
+  RANGES: lr_mblnr FOR mkpf-mblnr,
+          lr_mjahr FOR mkpf-mjahr.
+
+  " ********************************************************************
+  " Seleciona dados de documento de material
+  " ********************************************************************
+*  SELECT DISTINCT
+  SELECT mkpf~mblnr
+         mkpf~mjahr
+         mseg~zeile
+         mseg~matnr
+         mkpf~budat
+         mseg~bwart
+         mseg~lifnr
+* INI - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+         mseg~lgort   " deposito
+         mkpf~xblnr   " nota_fiscal/Serie
+         mkpf~bldat   " data_nf
+         mseg~rsnum   " reserva
+         rkpf~rsdat   " data_reserva
+* INI - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+         mara~mtart
+    FROM mkpf
+    INNER JOIN mseg ON mseg~mblnr EQ mkpf~mblnr
+                   AND mseg~mjahr EQ mkpf~mjahr
+    LEFT JOIN  rkpf ON rkpf~rsnum EQ mseg~rsnum " AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+    INNER JOIN mara ON mara~matnr EQ mseg~matnr
+    INTO TABLE lt_doc_mat
+  WHERE mseg~bwart IN s_bwart
+    AND mkpf~budat IN s_budat
+    AND mkpf~vgart IN s_vgart
+    AND mkpf~mblnr IN s_mblnr
+    AND mkpf~mjahr IN s_mjahr
+    AND mseg~werks IN s_werks
+    AND mseg~lgort IN s_lgort
+*    AND mara~mtart EQ 'ETER'   " AML - DDP154519 - 06/06/2025
+    ORDER BY: mkpf~mblnr
+              mkpf~mjahr
+              mseg~zeile.
+  IF sy-subrc IS INITIAL.
+    " ********************************************************************
+    " Chamada da Transação ZT438
+    " ********************************************************************
+
+    " Ativa exportação de dados do ALV
+    cl_salv_bs_runtime_info=>set(
+      EXPORTING display  = abap_false
+        metadata = abap_true
+        data     = abap_true ).
+
+    " ********************************************************************
+    " Filtro da Transação ZT438
+    " ********************************************************************
+    LOOP AT lt_doc_mat INTO ls_doc_mat.
+      MOVE-CORRESPONDING ls_doc_mat TO ls_doc_mat_s.
+      APPEND ls_doc_mat_s TO lt_doc_mat_s.
+    ENDLOOP.
+
+    SORT lt_doc_mat_s BY mblnr
+                         mjahr.
+    DELETE ADJACENT DUPLICATES FROM lt_doc_mat_s COMPARING ALL FIELDS.
+
+    LOOP AT lt_doc_mat_s INTO ls_doc_mat_s.
+
+      lv_cont = lv_cont + 1.
+
+      lr_mblnr = lc_ieq.
+      lr_mblnr-low  = ls_doc_mat_s-mblnr.
+      lr_mblnr-high = space.
+      APPEND lr_mblnr.
+
+      lr_mjahr = lc_ieq.
+      lr_mjahr-low  = ls_doc_mat_s-mjahr.
+      lr_mjahr-high = space.
+      APPEND lr_mjahr.
+
+      " Lógica para evitar DUMP de estouro de range nas seleções com LR_MBLNR
+      IF lv_cont EQ 6000.
+        SORT lr_mblnr BY low.
+        DELETE ADJACENT DUPLICATES FROM lr_mblnr.
+        SORT lr_mjahr BY low.
+        DELETE ADJACENT DUPLICATES FROM lr_mjahr.
+
+        " ********************************************************************
+        " Realiza submit na transação ZT438
+        " ********************************************************************
+        lv_zrmm0026 = abap_true.
+
+        EXPORT lv_zrmm0026 TO MEMORY ID 'ZRMM0026'.
+
+        SUBMIT zrsd198
+          WITH FREE SELECTIONS lt_texpr
+          WITH s_mblnr  IN lr_mblnr[]
+          WITH s_mjahr  IN lr_mjahr[]
+          WITH s_matnr  IN s_matnr[]
+          WITH s_serge  IN s_serge[]
+          WITH s_invnr  IN s_invnr[]
+          WITH s_equnr  IN s_equnr[]
+*          WITH s_werks  IN s_werks[]
+*          WITH s_lgort  IN s_lgort[]
+          WITH s_lbbsa  IN s_lbbsa[]
+          WITH s_esn18  IN s_esn18[]
+          WITH s_matnr  IN s_matnr[]
+          WITH s_kunnr  IN s_kunnr[]
+          WITH s_nfnum  IN s_nfnum[]
+          WITH s_docdat IN s_docdat[]
+          WITH s_vkorg  IN s_vkorg[]
+          WITH s_vtweg  IN s_vtweg[]
+          WITH s_vbeln  IN s_vbeln[]
+        USING SELECTION-SCREEN 1000 AND
+              RETURN EXPORTING LIST TO MEMORY.
+
+        FREE MEMORY ID 'ZRMM0026'.
+
+        ASSIGN ('(ZRSD198)X_WHS') TO <fs_x_whs>.
+        IF <fs_x_whs> IS ASSIGNED.
+          lv_x_whs = <fs_x_whs>.
+        ENDIF.
+
+        " ********************************************************************
+        " Recupera tabela ALV
+        " ********************************************************************
+        TRY.
+            cl_salv_bs_runtime_info=>get_data_ref( IMPORTING r_data = lf_ref ).
+            ASSIGN lf_ref->* TO <fs_t_data>.
+          CATCH cx_salv_bs_sc_runtime_info.
+            MESSAGE 'Erro ao recuperar dados do ALV - ZT438' TYPE 'E'.
+        ENDTRY.
+
+        cl_salv_bs_runtime_info=>clear_all( ).
+
+        IF <fs_t_data> IS ASSIGNED.
+
+          IF NOT <fs_t_data>[] IS INITIAL.
+
+            LOOP AT <fs_t_data> ASSIGNING <fs_s_data>.
+
+              IF lv_x_whs IS INITIAL.
+                MOVE-CORRESPONDING <fs_s_data> TO ls_x_ssd167b.
+                APPEND ls_x_ssd167b TO lt_x_ssd167b.
+              ELSE.
+                MOVE-CORRESPONDING <fs_s_data> TO ls_x_ssd180b.
+                APPEND ls_x_ssd180b TO lt_x_ssd180b.
+              ENDIF.
+
+            ENDLOOP.
+          ENDIF.
+        ENDIF.
+
+        FREE: lv_cont,
+              lv_x_whs,
+              lr_mblnr[],
+              lr_mjahr[].
+      ENDIF.
+    ENDLOOP.
+
+    " Realiza chamada para registros que ficaram no range LR_MBLNR
+    IF NOT lr_mblnr[] IS INITIAL.
+
+      SORT lr_mblnr BY low.
+      DELETE ADJACENT DUPLICATES FROM lr_mblnr.
+      SORT lr_mjahr BY low.
+      DELETE ADJACENT DUPLICATES FROM lr_mjahr.
+
+      " ********************************************************************
+      " Realiza submit na transação ZT438
+      " ********************************************************************
+      lv_zrmm0026 = abap_true.
+
+      EXPORT lv_zrmm0026 TO MEMORY ID 'ZRMM0026'.
+
+      SUBMIT zrsd198
+        WITH FREE SELECTIONS lt_texpr
+        WITH s_mblnr  IN lr_mblnr[]
+        WITH s_mjahr  IN lr_mjahr[]
+        WITH s_matnr  IN s_matnr[]
+        WITH s_serge  IN s_serge[]
+        WITH s_invnr  IN s_invnr[]
+        WITH s_equnr  IN s_equnr[]
+*        WITH s_werks  IN s_werks[]
+*        WITH s_lgort  IN s_lgort[]
+        WITH s_lbbsa  IN s_lbbsa[]
+        WITH s_esn18  IN s_esn18[]
+        WITH s_matnr  IN s_matnr[]
+        WITH s_kunnr  IN s_kunnr[]
+        WITH s_nfnum  IN s_nfnum[]
+        WITH s_docdat IN s_docdat[]
+        WITH s_vkorg  IN s_vkorg[]
+        WITH s_vtweg  IN s_vtweg[]
+        WITH s_vbeln  IN s_vbeln[]
+      USING SELECTION-SCREEN 1000 AND
+            RETURN EXPORTING LIST TO MEMORY.
+
+      FREE MEMORY ID 'ZRMM0026'.
+
+      ASSIGN ('(ZRSD198)X_WHS') TO <fs_x_whs>.
+      IF <fs_x_whs> IS ASSIGNED.
+        lv_x_whs = <fs_x_whs>.
+      ENDIF.
+
+      " ********************************************************************
+      " Recupera tabela ALV
+      " ********************************************************************
+      TRY.
+          cl_salv_bs_runtime_info=>get_data_ref( IMPORTING r_data = lf_ref ).
+          ASSIGN lf_ref->* TO <fs_t_data>.
+        CATCH cx_salv_bs_sc_runtime_info.
+          MESSAGE 'Erro ao recuperar dados do ALV - ZT438' TYPE 'E'.
+      ENDTRY.
+
+      cl_salv_bs_runtime_info=>clear_all( ).
+
+      IF <fs_t_data> IS ASSIGNED.
+
+        IF NOT <fs_t_data>[] IS INITIAL.
+
+          LOOP AT <fs_t_data> ASSIGNING <fs_s_data>.
+
+            IF lv_x_whs IS INITIAL.
+              MOVE-CORRESPONDING <fs_s_data> TO ls_x_ssd167b.
+              APPEND ls_x_ssd167b TO lt_x_ssd167b.
+            ELSE.
+              MOVE-CORRESPONDING <fs_s_data> TO ls_x_ssd180b.
+              APPEND ls_x_ssd180b TO lt_x_ssd180b.
+            ENDIF.
+
+          ENDLOOP.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+
+    IF NOT lt_x_ssd167b[] IS INITIAL.
+      " Seleção pelo indíce B - Índice nº série e nº material
+      SELECT objk~equnr
+             objk~sernr
+             objk~matnr
+             ser03~mblnr
+             ser03~mjahr
+             ser03~zeile
+        FROM objk
+        INNER JOIN ser03 ON objk~obknr EQ ser03~obknr
+        INTO TABLE lt_objk_ser03
+        FOR ALL ENTRIES IN lt_x_ssd167b
+      WHERE sernr EQ lt_x_ssd167b-sernr
+        AND matnr EQ lt_x_ssd167b-matnr.
+
+      SORT lt_objk_ser03 BY equnr
+                            sernr
+                            matnr
+                            mblnr
+                            mjahr
+                            zeile.
+    ENDIF.
+
+    " ********************************************************************
+    " Preenche saída do relatório
+    " ********************************************************************
+*Início - Ralves - DDP158889-ZT0378 Seriais ñ carrega D - 28.10.2025
+
+    SORT lt_doc_mat     BY mblnr mjahr zeile.
+    SORT lt_objk_ser03  BY mblnr mjahr zeile.
+    SORT lt_x_ssd167b   BY mblnr mjahr matnr sernr equnr.
+
+    LOOP AT lt_doc_mat INTO ls_doc_mat.
+
+      " Monta linha de saída
+      APPEND INITIAL LINE TO gt_saida ASSIGNING <fs_s_saida>.
+
+      " Busca registro correspondente em lt_objk_ser03
+      READ TABLE lt_objk_ser03 INTO ls_objk_ser03
+           WITH KEY mblnr = ls_doc_mat-mblnr
+                    mjahr = ls_doc_mat-mjahr
+                    zeile = ls_doc_mat-zeile
+           BINARY SEARCH.
+
+      IF sy-subrc = 0.
+
+        " Busca registro correspondente em lt_x_ssd167b
+        READ TABLE lt_x_ssd167b INTO ls_x_ssd167b
+             WITH KEY equnr = ls_objk_ser03-equnr
+                      sernr = ls_objk_ser03-sernr
+                      matnr = ls_objk_ser03-matnr
+                      mblnr = ls_objk_ser03-mblnr
+                      mjahr = ls_objk_ser03-mjahr
+             BINARY SEARCH.
+
+        IF sy-subrc = 0.
+          MOVE-CORRESPONDING ls_x_ssd167b TO <fs_s_saida>.
+        ENDIF.
+
+      else.
+
+         MOVE-CORRESPONDING ls_doc_mat TO <fs_s_saida>.
+
+      ENDIF.
+
+      " Ajustes específicos - AML - 03/02/2025
+      <fs_s_saida>-zeile = ls_doc_mat-zeile.
+
+      SPLIT ls_doc_mat-xblnr AT '-' INTO <fs_s_saida>-xblnr <fs_s_saida>-xblnr1.
+
+      IF NOT ls_doc_mat-xblnr IS INITIAL.
+        <fs_s_saida>-bldat = ls_doc_mat-bldat.
+      ENDIF.
+
+      <fs_s_saida>-rsnum = ls_doc_mat-rsnum.
+      <fs_s_saida>-rsdat = ls_doc_mat-rsdat.
+      <fs_s_saida>-lgort = ls_doc_mat-lgort.
+
+      " Campos padrão
+      <fs_s_saida>-budat = ls_doc_mat-budat.
+      <fs_s_saida>-bwart = ls_doc_mat-bwart.
+      <fs_s_saida>-mtart = ls_doc_mat-mtart.
+      <fs_s_saida>-lifnr = ls_doc_mat-lifnr.
+      <fs_s_saida>-datum = sy-datum.
+      <fs_s_saida>-uzeit = sy-uzeit.
+
+    ENDLOOP.
+
+
+*    LOOP AT lt_x_ssd167b INTO ls_x_ssd167b.
+*      READ TABLE lt_objk_ser03 INTO ls_objk_ser03
+*        WITH KEY equnr = ls_x_ssd167b-equnr
+*                 sernr = ls_x_ssd167b-sernr
+*                 matnr = ls_x_ssd167b-matnr
+*                 mblnr = ls_x_ssd167b-mblnr
+*                 mjahr = ls_x_ssd167b-mjahr BINARY SEARCH.
+*      IF sy-subrc IS INITIAL.
+*        READ TABLE lt_doc_mat INTO ls_doc_mat
+*          WITH KEY mblnr = ls_objk_ser03-mblnr
+*                   mjahr = ls_objk_ser03-mjahr
+*                   zeile = ls_objk_ser03-zeile BINARY SEARCH.
+*        IF sy-subrc IS INITIAL.
+*          APPEND INITIAL LINE TO gt_saida ASSIGNING <fs_s_saida>.
+*          MOVE-CORRESPONDING ls_x_ssd167b TO <fs_s_saida>.
+*
+** INI - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+*          <fs_s_saida>-zeile  = ls_doc_mat-zeile.
+*
+*          SPLIT ls_doc_mat-xblnr AT '-' INTO: <fs_s_saida>-xblnr
+*                                              <fs_s_saida>-xblnr1.
+*          IF NOT ls_doc_mat-xblnr IS INITIAL.
+*            <fs_s_saida>-bldat  = ls_doc_mat-bldat.
+*          ENDIF.
+*          <fs_s_saida>-rsnum  = ls_doc_mat-rsnum.
+*          <fs_s_saida>-rsdat  = ls_doc_mat-rsdat.
+*          <fs_s_saida>-lgort  = ls_doc_mat-lgort.
+** FIM - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+*
+*          <fs_s_saida>-budat = ls_doc_mat-budat.
+*          <fs_s_saida>-bwart = ls_doc_mat-bwart.
+*          <fs_s_saida>-mtart = ls_doc_mat-mtart.
+*          <fs_s_saida>-lifnr = ls_doc_mat-lifnr.
+*          <fs_s_saida>-datum = sy-datum.
+*          <fs_s_saida>-uzeit = sy-uzeit.
+*        ENDIF.
+*      ENDIF.
+*    ENDLOOP.
+*Fim - Ralves - DDP158889-ZT0378 Seriais ñ carrega D - 28.10.2025
+    SORT gt_saida BY bwart sernr mblnr zeile.
+
+    DELETE ADJACENT DUPLICATES FROM gt_saida COMPARING bwart sernr mblnr zeile.
+
+    IF gt_saida[] IS INITIAL.
+      MESSAGE s005 DISPLAY LIKE 'E'. " Dados não encontrados para o critério de seleção informado.
+      LEAVE LIST-PROCESSING.
+    ENDIF.
+  ELSE.
+    MESSAGE s005 DISPLAY LIKE 'E'. " Dados não encontrados para o critério de seleção informado.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+
+ENDFORM.                    " F_GET_DATA
+*&---------------------------------------------------------------------*
+*&      Form  F_GENERATE_FILE
+*&---------------------------------------------------------------------*
+FORM f_generate_file .
+
+  CONSTANTS: lc_arquivo TYPE char9        VALUE 'zt0378_',
+             lc_txt     TYPE c LENGTH 004 VALUE '.txt'.
+
+  TYPES: BEGIN OF ty_file,
+           line TYPE string,
+         END OF ty_file.
+
+  FIELD-SYMBOLS: <fs_alv>  TYPE ty_saida,
+                 <fs_file> TYPE ty_file.
+
+  DATA: lv_dir             TYPE string VALUE IS INITIAL,
+        lv_file_line       TYPE string VALUE IS INITIAL,
+        lt_file            TYPE TABLE OF ty_file,
+
+        " Campos de data
+        lv_budat            TYPE char10,
+        lv_data_file        TYPE char10,
+        lv_hora_file        TYPE char10,
+* INI - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+        lv_bldat        TYPE char10,
+        lv_rsdat        TYPE char10.
+* FIM - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+
+
+  IF p_ext EQ abap_false.
+    RETURN.
+  ENDIF.
+
+  IF gt_saida[] IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  " Montar arquivo - cabeçalho
+  CONCATENATE 'data_lancamento'                  " Data lançamento
+              'tipo_movimento'                   " TpMov
+              'tipo_material'                    " Tipo Material
+              'fornecedor'                       " Fornecedor
+              'status'                           " Status
+              'material'                         " Material
+              'texto_breve_material'             " Texto breve material
+              'numero_serie'                     " Nº de série
+              'status_do_esn'                    " Status do ESN
+              'numero_serie_fabricante'          " Nº série fabricante
+              'numero_inventario'                " Nº inventário
+              'material_1'                       " Material
+              'numero_identificacao_tecnica'     " Nº ident.técnica
+              'equipamento'                      " Equipamento
+              'centro'                           " Centro
+              'deposito'                         " Depósito
+              'tipo_estoque'                     " Tipo estoque (reg.principal)
+              'documento_material'               " Doc.material
+              'ano_documento_material'           " Ano doc.material
+              'data_arquivo'                     " data_arquivo
+              'hora_arquivo'                     " hora_arquivo
+* INI - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+              'item'                             " item
+              'nota_fiscal'                      " Nota Fiscal
+              'serie_nf'                         " Série
+              'data_nf'                          " Data Nota Fiscal
+              'reserva'                          " Reserva
+              'data_reserva'                     " Data Reserva
+* FIM - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+              INTO lv_file_line SEPARATED BY '|'.
+  APPEND INITIAL LINE TO lt_file ASSIGNING <fs_file>.
+  <fs_file>-line = lv_file_line.
+
+  WRITE: sy-datum TO lv_data_file,
+         sy-uzeit TO lv_hora_file.
+
+  " Montar arquivo - dados
+  LOOP AT gt_saida ASSIGNING <fs_alv>.
+
+    WRITE <fs_alv>-budat TO lv_budat.
+    WRITE <fs_alv>-bldat TO lv_bldat. " AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+    WRITE <fs_alv>-rsdat TO lv_rsdat. " AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+
+    CONCATENATE lv_budat                    " Data lançamento
+                <fs_alv>-bwart              " TpMov
+                <fs_alv>-mtart              " Tipo Material
+                <fs_alv>-lifnr              " Fornecedor
+                <fs_alv>-flag               " Status
+                <fs_alv>-matnr              " Material
+                <fs_alv>-maktx              " Texto breve material
+                <fs_alv>-sernr              " Nº de série
+                <fs_alv>-status_esn         " Status do ESN
+                <fs_alv>-serge              " Nº série fabricante
+                <fs_alv>-invnr              " Nº inventário
+                <fs_alv>-matnr2             " Material
+                <fs_alv>-tidnr              " Nº ident.técnica
+                <fs_alv>-equnr              " Equipamento
+                <fs_alv>-werks              " Centro
+                <fs_alv>-lgort              " Depósito
+                <fs_alv>-lbbsa              " Tipo estoque (reg.principal)
+                <fs_alv>-mblnr              " Doc.material
+                <fs_alv>-mjahr              " Ano doc.material
+                lv_data_file                " Data_arquivo
+                lv_hora_file                " Hora_arquivo
+* INI - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+                <fs_alv>-zeile              " Item
+                <fs_alv>-xblnr              " Nota Fiscal
+                <fs_alv>-xblnr1             " Série
+                lv_bldat                    " Data Nota Fiscal
+                <fs_alv>-rsnum              " Reserva
+                lv_rsdat                    " Data Reserva
+* FIM - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+                INTO lv_file_line SEPARATED BY '|'.
+
+    APPEND INITIAL LINE TO lt_file ASSIGNING <fs_file>.
+    <fs_file>-line = lv_file_line.
+  ENDLOOP.
+
+  " Tratando diretório e nome do arquivo
+  CASE abap_true.
+    WHEN p_loc.
+      " Arquivo local
+      lv_dir = p_dir_l.
+    WHEN p_serv.
+      " Arquivo servidor
+      lv_dir = p_dir_s.
+  ENDCASE.
+
+  PERFORM f_check_dir USING lv_dir.
+
+  lv_dir = lv_dir && lc_arquivo && sy-datum && |_| && sy-uzeit && lc_txt.
+
+  " Gerar arquivo
+  CASE abap_true.
+    WHEN p_loc.
+      " Arquivo local
+      CALL FUNCTION 'GUI_DOWNLOAD'
+        EXPORTING
+          filename         = lv_dir
+          filetype         = 'ASC'
+          codepage         = '4110' " UTF-8
+        TABLES
+          data_tab         = lt_file
+        EXCEPTIONS
+          file_write_error = 1
+          OTHERS           = 2.
+      IF sy-subrc EQ 0.
+        MESSAGE text-005 TYPE 'S'.
+
+      ENDIF.
+    WHEN p_serv.
+      " Arquivo servidor
+      OPEN DATASET lv_dir FOR OUTPUT IN TEXT MODE ENCODING UTF-8.
+      IF sy-subrc NE 0.
+        MESSAGE text-005 TYPE 'S'.
+        STOP.
+      ENDIF.
+      LOOP AT lt_file ASSIGNING <fs_file>.
+        lv_file_line = <fs_file>-line.
+        TRANSFER lv_file_line TO lv_dir.
+      ENDLOOP.
+  ENDCASE.
+
+ENDFORM.                    " F_GENERATE_FILE
+*&---------------------------------------------------------------------*
+*&      Form  F_CHECK_DIR
+*&---------------------------------------------------------------------*
+FORM f_check_dir USING p_dir TYPE any.
+
+  DATA: lv_tam TYPE i.
+
+  lv_tam = strlen( p_dir ).
+  lv_tam = lv_tam - 1.
+  IF p_dir+lv_tam(1) EQ '/' OR
+     p_dir+lv_tam(1) EQ '\'.
+    p_dir = p_dir(lv_tam).
+  ENDIF.
+
+  IF p_dir CS '\'.
+    p_dir = p_dir && '\'.
+  ELSE.
+    p_dir = p_dir && '/'.
+  ENDIF.
+
+ENDFORM.                    " F_CHECK_DIR
+*&---------------------------------------------------------------------*
+*&      Form  F_DISPLAY_ALV
+*&---------------------------------------------------------------------*
+FORM f_display_alv .
+
+  DATA: lcl_table     TYPE REF TO cl_salv_table,
+        lcl_columns   TYPE REF TO cl_salv_columns_table,
+        lcl_column    TYPE REF TO cl_salv_column_table,
+        lcl_functions TYPE REF TO cl_salv_functions_list,
+        lcl_sorts     TYPE REF TO cl_salv_sorts.
+
+  IF p_alv EQ abap_false.
+    RETURN.
+  ENDIF.
+
+  " Criar a referência com o método FACTORY para o objeto ALV:
+  TRY.
+      cl_salv_table=>factory( IMPORTING r_salv_table = lcl_table
+                               CHANGING t_table      = gt_saida ).
+    CATCH cx_salv_msg .
+      EXIT.
+  ENDTRY.
+
+  " Ajustamos os dados
+  lcl_columns = lcl_table->get_columns( ).
+
+  TRY.
+      lcl_column ?= lcl_columns->get_column( 'BUDAT' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'data_lancamento' ).
+
+      lcl_column ?= lcl_columns->get_column( 'BWART' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'tipo_movimento' ).
+
+      lcl_column ?= lcl_columns->get_column( 'MTART' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'tipo_material' ).
+
+      lcl_column ?= lcl_columns->get_column( 'LIFNR' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'fornecedor' ).
+
+      lcl_column ?= lcl_columns->get_column( 'FLAG' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'status' ).
+
+      lcl_column ?= lcl_columns->get_column( 'MATNR' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'material' ).
+
+      lcl_column ?= lcl_columns->get_column( 'MAKTX' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'texto_breve_material' ).
+
+      lcl_column ?= lcl_columns->get_column( 'SERNR' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'numero_serie' ).
+
+      lcl_column ?= lcl_columns->get_column( 'STATUS_ESN' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'status_do_esn' ).
+
+      lcl_column ?= lcl_columns->get_column( 'SERGE' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'numero_serie_fabricante' ).
+
+      lcl_column ?= lcl_columns->get_column( 'INVNR' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'numero_inventario' ).
+
+      lcl_column ?= lcl_columns->get_column( 'MATNR2' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'material_1' ).
+
+      lcl_column ?= lcl_columns->get_column( 'TIDNR' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'numero_identificacao_tecnica' ).
+
+      lcl_column ?= lcl_columns->get_column( 'EQUNR' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'equipamento' ).
+
+      lcl_column ?= lcl_columns->get_column( 'WERKS' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'centro' ).
+
+      lcl_column ?= lcl_columns->get_column( 'LGORT' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'deposito' ).
+
+      lcl_column ?= lcl_columns->get_column( 'LBBSA' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'tipo_estoque' ).
+
+      lcl_column ?= lcl_columns->get_column( 'MBLNR' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'documento_material' ).
+
+      lcl_column ?= lcl_columns->get_column( 'MJAHR' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'ano_documento_material' ).
+
+      lcl_column ?= lcl_columns->get_column( 'DATUM' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'data_arquivo' ).
+
+      lcl_column ?= lcl_columns->get_column( 'UZEIT' ).
+      lcl_column->set_short_text( '' ).
+      lcl_column->set_medium_text( '' ).
+      lcl_column->set_long_text( 'hora_arquivo' ).
+
+* INI - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+      lcl_column ?= lcl_columns->get_column( 'XBLNR' ).
+      lcl_column->set_short_text( 'NF' ).
+      lcl_column->set_medium_text( 'Nota Fiscal' ).
+      lcl_column->set_long_text( 'Nota Fiscal' ).
+
+      lcl_column ?= lcl_columns->get_column( 'XBLNR1' ).
+      lcl_column->set_short_text( 'Série NF' ).
+      lcl_column->set_medium_text( 'Série NF' ).
+      lcl_column->set_long_text( 'Série NF' ).
+* FIM - AML - 03/02/2025 -  SD 7000006377/142074 Ajustes no Extrator ZT0378
+
+    CATCH cx_salv_data_error .                          "#EC NO_HANDLER
+    CATCH cx_salv_not_found .                           "#EC NO_HANDLER
+    CATCH cx_salv_existing .                            "#EC NO_HANDLER
+  ENDTRY.
+
+  " Tamanho da coluna otimizada
+  lcl_columns->set_optimize( abap_true ).
+  " Ordenar saída
+  lcl_sorts =  lcl_table->get_sorts( ).
+*    lcl_sorts->add_sort( 'VBELN' ).
+  " Buscar tollbar standard completo
+  lcl_functions = lcl_table->get_functions( ).
+  " Setar tollbar standard completo
+  lcl_functions->set_all( ).
+  " Chamar o método DISPLAY para mostrar os grid:
+  lcl_table->display( ).
+
+ENDFORM.                    " F_DISPLAY_ALV
